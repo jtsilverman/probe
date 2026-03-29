@@ -3,8 +3,13 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/jtsilverman/probe/internal/diff"
+	"github.com/jtsilverman/probe/internal/output"
+	"github.com/jtsilverman/probe/internal/reviewer"
 )
 
 var (
@@ -38,30 +43,131 @@ func init() {
 	reviewCmd.Flags().StringVar(&flagModel, "model", "claude-sonnet-4-20250514", "Claude model to use")
 	reviewCmd.Flags().IntVar(&flagMaxFiles, "max-files", 20, "Max files to review")
 
-	// Make review the default command
 	rootCmd.AddCommand(reviewCmd)
+
+	// Copy flags to root command so `probe --file` works without `probe review --file`
+	rootCmd.Flags().StringVar(&flagBranch, "branch", "", "Review diff against branch (e.g., main)")
+	rootCmd.Flags().StringVar(&flagFile, "file", "", "Review a specific file")
+	rootCmd.Flags().BoolVar(&flagStdin, "stdin", false, "Read diff from stdin")
+	rootCmd.Flags().BoolVar(&flagJSON, "json", false, "Output as JSON")
+	rootCmd.Flags().BoolVar(&flagMarkdown, "markdown", false, "Output as GitHub markdown")
+	rootCmd.Flags().BoolVar(&flagFix, "fix", false, "Include fix suggestions")
+	rootCmd.Flags().StringVar(&flagSeverity, "severity", "info", "Minimum severity")
+	rootCmd.Flags().StringVar(&flagCategory, "category", "", "Filter categories")
+	rootCmd.Flags().StringVar(&flagModel, "model", "claude-sonnet-4-20250514", "Claude model")
+	rootCmd.Flags().IntVar(&flagMaxFiles, "max-files", 20, "Max files to review")
 	rootCmd.RunE = runReview
 }
 
 func runReview(cmd *cobra.Command, args []string) error {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
-		return fmt.Errorf("ANTHROPIC_API_KEY environment variable is required")
+		return fmt.Errorf("ANTHROPIC_API_KEY environment variable is required.\nGet one at https://console.anthropic.com/")
 	}
 
-	// Determine diff source
-	source := "staged"
-	if flagBranch != "" {
-		source = "branch:" + flagBranch
+	// Get the diff
+	var rawDiff string
+	var err error
+	var source string
+
+	if flagStdin {
+		source = "stdin"
+		rawDiff, err = diff.ReadStdin()
 	} else if flagFile != "" {
 		source = "file:" + flagFile
-	} else if flagStdin {
-		source = "stdin"
+		rawDiff, err = diff.ReadFile(flagFile)
+	} else if flagBranch != "" {
+		source = "branch:" + flagBranch
+		rawDiff, err = diff.GetBranchDiff(flagBranch)
+	} else {
+		source = "staged changes"
+		rawDiff, err = diff.GetStagedDiff()
 	}
 
-	fmt.Fprintf(os.Stderr, "probe: reviewing %s (model: %s)\n", source, flagModel)
+	if err != nil {
+		return fmt.Errorf("failed to get diff: %w", err)
+	}
 
-	// TODO: implement full pipeline in subsequent tasks
-	fmt.Fprintf(os.Stderr, "probe: pipeline not yet wired\n")
+	if strings.TrimSpace(rawDiff) == "" {
+		fmt.Fprintf(os.Stderr, "probe: no changes to review\n")
+		return nil
+	}
+
+	// Parse the diff
+	files := diff.ParseUnifiedDiff(rawDiff)
+	if len(files) == 0 {
+		fmt.Fprintf(os.Stderr, "probe: no supported files in diff\n")
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "probe: reviewing %s (%d files, model: %s)\n", source, len(files), flagModel)
+
+	// Run the review
+	cfg := reviewer.ReviewConfig{
+		APIKey:   apiKey,
+		Model:    flagModel,
+		MaxFiles: flagMaxFiles,
+	}
+
+	review, err := reviewer.RunReview(files, cfg)
+	if err != nil {
+		return fmt.Errorf("review failed: %w", err)
+	}
+
+	// Filter by severity
+	if flagSeverity != "info" {
+		review.Findings = filterBySeverity(review.Findings, flagSeverity)
+		review.Summary = reviewer.ComputeSummary(review.Findings)
+	}
+
+	// Filter by category
+	if flagCategory != "" {
+		cats := strings.Split(flagCategory, ",")
+		review.Findings = filterByCategory(review.Findings, cats)
+		review.Summary = reviewer.ComputeSummary(review.Findings)
+	}
+
+	// Output
+	if flagJSON {
+		output.PrintJSON(review)
+	} else if flagMarkdown {
+		output.PrintMarkdown(review)
+	} else {
+		output.PrintTerminal(review)
+	}
+
+	// Exit code
+	if review.Summary.Verdict == "fail" {
+		os.Exit(1)
+	}
+
 	return nil
+}
+
+func filterBySeverity(findings []reviewer.Finding, minSeverity string) []reviewer.Finding {
+	severityOrder := map[string]int{"info": 0, "warning": 1, "critical": 2}
+	minLevel := severityOrder[minSeverity]
+
+	var filtered []reviewer.Finding
+	for _, f := range findings {
+		if severityOrder[f.Severity] >= minLevel {
+			filtered = append(filtered, f)
+		}
+	}
+	return filtered
+}
+
+func filterByCategory(findings []reviewer.Finding, categories []string) []reviewer.Finding {
+	catSet := map[string]bool{}
+	for _, c := range categories {
+		catSet[strings.TrimSpace(c)] = true
+	}
+
+	var filtered []reviewer.Finding
+	for _, f := range findings {
+		if catSet[f.Category] {
+			filtered = append(filtered, f)
+		}
+	}
+	return filtered
 }
