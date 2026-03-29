@@ -23,6 +23,7 @@ var (
 	flagCategory string
 	flagModel    string
 	flagMaxFiles int
+	flagCLI      bool
 )
 
 var reviewCmd = &cobra.Command{
@@ -42,6 +43,7 @@ func init() {
 	reviewCmd.Flags().StringVar(&flagCategory, "category", "", "Filter categories (comma-separated: bug,security,performance,style,ai-pattern)")
 	reviewCmd.Flags().StringVar(&flagModel, "model", "claude-sonnet-4-20250514", "Claude model to use")
 	reviewCmd.Flags().IntVar(&flagMaxFiles, "max-files", 20, "Max files to review")
+	reviewCmd.Flags().BoolVar(&flagCLI, "cli", false, "Use claude CLI instead of API (uses your subscription, $0 cost)")
 
 	rootCmd.AddCommand(reviewCmd)
 
@@ -56,13 +58,14 @@ func init() {
 	rootCmd.Flags().StringVar(&flagCategory, "category", "", "Filter categories")
 	rootCmd.Flags().StringVar(&flagModel, "model", "claude-sonnet-4-20250514", "Claude model")
 	rootCmd.Flags().IntVar(&flagMaxFiles, "max-files", 20, "Max files to review")
+	rootCmd.Flags().BoolVar(&flagCLI, "cli", false, "Use claude CLI instead of API ($0 cost)")
 	rootCmd.RunE = runReview
 }
 
 func runReview(cmd *cobra.Command, args []string) error {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("ANTHROPIC_API_KEY environment variable is required.\nGet one at https://console.anthropic.com/")
+	if apiKey == "" && !flagCLI {
+		return fmt.Errorf("ANTHROPIC_API_KEY environment variable is required.\nGet one at https://console.anthropic.com/\nOr use --cli to use your Claude Code subscription instead ($0 cost).")
 	}
 
 	// Get the diff
@@ -107,6 +110,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 		APIKey:   apiKey,
 		Model:    flagModel,
 		MaxFiles: flagMaxFiles,
+		UseCLI:   flagCLI,
 	}
 
 	review, err := reviewer.RunReview(files, cfg)

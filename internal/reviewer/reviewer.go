@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -21,6 +22,7 @@ type ReviewConfig struct {
 	APIKey   string
 	Model    string
 	MaxFiles int
+	UseCLI   bool // Use `claude --print` instead of API
 }
 
 func RunReview(files []diff.FileDiff, cfg ReviewConfig) (*Review, error) {
@@ -43,10 +45,17 @@ func RunReview(files []diff.FileDiff, cfg ReviewConfig) (*Review, error) {
 	var allFindings []Finding
 	var totalTokens TokenUsage
 
-	client := anthropic.NewClient(option.WithAPIKey(cfg.APIKey))
-
 	for _, batch := range batches {
-		findings, tokens, err := reviewBatch(client, batch, cfg.Model)
+		var findings []Finding
+		var tokens TokenUsage
+		var err error
+
+		if cfg.UseCLI {
+			findings, tokens, err = reviewBatchCLI(batch, cfg.Model)
+		} else {
+			client := anthropic.NewClient(option.WithAPIKey(cfg.APIKey))
+			findings, tokens, err = reviewBatch(client, batch, cfg.Model)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -58,10 +67,16 @@ func RunReview(files []diff.FileDiff, cfg ReviewConfig) (*Review, error) {
 	totalTokens.Cost = float64(totalTokens.Input)/1_000_000*sonnetInputCost +
 		float64(totalTokens.Output)/1_000_000*sonnetOutputCost
 
+	model := cfg.Model
+	if cfg.UseCLI {
+		model = "claude-cli (" + cfg.Model + ")"
+		totalTokens.Cost = 0 // Uses subscription, not API billing
+	}
+
 	return &Review{
 		Findings: allFindings,
 		Summary:  ComputeSummary(allFindings),
-		Model:    cfg.Model,
+		Model:    model,
 		Tokens:   totalTokens,
 	}, nil
 }
@@ -103,6 +118,29 @@ func reviewBatch(client anthropic.Client, files []diff.FileDiff, model string) (
 	}
 
 	return findings, tokens, nil
+}
+
+func reviewBatchCLI(files []diff.FileDiff, model string) ([]Finding, TokenUsage, error) {
+	prompt := BuildReviewPrompt(files)
+	systemPrompt := GetSystemPrompt()
+
+	fullPrompt := systemPrompt + "\n\n" + prompt
+
+	// Pipe prompt via stdin to claude --print
+	cmd := exec.Command("claude", "--print", "--model", model)
+	cmd.Stdin = strings.NewReader(fullPrompt)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, TokenUsage{}, fmt.Errorf("claude CLI error: %w\n%s\n(is claude installed and authenticated?)", err, string(out))
+	}
+
+	responseText := string(out)
+	findings, err := parseFindings(responseText)
+	if err != nil {
+		return nil, TokenUsage{}, fmt.Errorf("failed to parse CLI review: %w", err)
+	}
+
+	return findings, TokenUsage{}, nil
 }
 
 func parseFindings(raw string) ([]Finding, error) {
