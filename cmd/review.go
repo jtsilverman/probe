@@ -24,6 +24,7 @@ var (
 	flagModel    string
 	flagMaxFiles int
 	flagCLI      bool
+	flagVerify   bool
 )
 
 var reviewCmd = &cobra.Command{
@@ -44,6 +45,7 @@ func init() {
 	reviewCmd.Flags().StringVar(&flagModel, "model", "claude-sonnet-4-20250514", "Claude model to use")
 	reviewCmd.Flags().IntVar(&flagMaxFiles, "max-files", 20, "Max files to review")
 	reviewCmd.Flags().BoolVar(&flagCLI, "cli", false, "Use claude CLI instead of API (uses your subscription, $0 cost)")
+	reviewCmd.Flags().BoolVar(&flagVerify, "verify", false, "After review, re-review the same code to verify findings are real (reduces false positives)")
 
 	rootCmd.AddCommand(reviewCmd)
 
@@ -59,6 +61,7 @@ func init() {
 	rootCmd.Flags().StringVar(&flagModel, "model", "claude-sonnet-4-20250514", "Claude model")
 	rootCmd.Flags().IntVar(&flagMaxFiles, "max-files", 20, "Max files to review")
 	rootCmd.Flags().BoolVar(&flagCLI, "cli", false, "Use claude CLI instead of API ($0 cost)")
+	rootCmd.Flags().BoolVar(&flagVerify, "verify", false, "Re-review to verify findings (reduces false positives)")
 	rootCmd.RunE = runReview
 }
 
@@ -118,6 +121,28 @@ func runReview(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("review failed: %w", err)
 	}
 
+	// Verify: re-run review and only keep findings confirmed in both passes
+	if flagVerify && len(review.Findings) > 0 {
+		fmt.Fprintf(os.Stderr, "probe: verifying %d findings (pass 2)...\n", len(review.Findings))
+		review2, err := reviewer.RunReview(files, cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "probe: verification pass failed: %v (using original results)\n", err)
+		} else {
+			confirmed := verifyFindings(review.Findings, review2.Findings)
+			dropped := len(review.Findings) - len(confirmed)
+			if dropped > 0 {
+				fmt.Fprintf(os.Stderr, "probe: dropped %d unconfirmed findings, %d verified\n", dropped, len(confirmed))
+			} else {
+				fmt.Fprintf(os.Stderr, "probe: all %d findings confirmed\n", len(confirmed))
+			}
+			review.Findings = confirmed
+			review.Summary = reviewer.ComputeSummary(confirmed)
+			review.Tokens.Input += review2.Tokens.Input
+			review.Tokens.Output += review2.Tokens.Output
+			review.Tokens.Cost += review2.Tokens.Cost
+		}
+	}
+
 	// Filter by severity
 	if flagSeverity != "info" {
 		review.Findings = filterBySeverity(review.Findings, flagSeverity)
@@ -159,6 +184,36 @@ func filterBySeverity(findings []reviewer.Finding, minSeverity string) []reviewe
 		}
 	}
 	return filtered
+}
+
+// verifyFindings keeps only findings from pass 1 that are confirmed by pass 2.
+// A finding is "confirmed" if pass 2 has a finding in the same file with matching
+// category and overlapping line range (exact title match not required since Claude
+// may phrase it differently).
+func verifyFindings(pass1, pass2 []reviewer.Finding) []reviewer.Finding {
+	var confirmed []reviewer.Finding
+	for _, f1 := range pass1 {
+		for _, f2 := range pass2 {
+			if f1.File == f2.File && f1.Category == f2.Category && linesOverlap(f1, f2) {
+				confirmed = append(confirmed, f1)
+				break
+			}
+		}
+	}
+	return confirmed
+}
+
+func linesOverlap(a, b reviewer.Finding) bool {
+	aStart, aEnd := a.StartLine, a.EndLine
+	bStart, bEnd := b.StartLine, b.EndLine
+	if aEnd == 0 {
+		aEnd = aStart
+	}
+	if bEnd == 0 {
+		bEnd = bStart
+	}
+	// Allow some slack (within 5 lines) since Claude may reference slightly different ranges
+	return aStart <= bEnd+5 && bStart <= aEnd+5
 }
 
 func filterByCategory(findings []reviewer.Finding, categories []string) []reviewer.Finding {
