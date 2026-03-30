@@ -53,6 +53,20 @@ func ReadFile(path string) (string, error) {
 	return sb.String(), nil
 }
 
+// ReadFullFile reads the current version of a file from the working tree.
+// Returns empty string if file doesn't exist or exceeds maxSize.
+func ReadFullFile(path string, maxSize int64) string {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() > maxSize {
+		return ""
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(content)
+}
+
 // ReadStdin reads all of stdin
 func ReadStdin() (string, error) {
 	stat, _ := os.Stdin.Stat()
