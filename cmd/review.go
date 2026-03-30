@@ -183,7 +183,9 @@ func runReview(cmd *cobra.Command, args []string) error {
 	}
 
 	// Output
-	if flagJSON {
+	if flagFix {
+		output.PrintPatch(review)
+	} else if flagJSON {
 		output.PrintJSON(review)
 	} else if flagMarkdown {
 		output.PrintMarkdown(review)
