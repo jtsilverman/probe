@@ -66,6 +66,17 @@ func init() {
 }
 
 func runReview(cmd *cobra.Command, args []string) error {
+	// Apply .proberc defaults where CLI flags weren't explicitly set
+	if cfg.Severity != "" && !cmd.Flags().Changed("severity") {
+		flagSeverity = cfg.Severity
+	}
+	if cfg.Model != "" && !cmd.Flags().Changed("model") {
+		flagModel = cfg.Model
+	}
+	if len(cfg.Categories) > 0 && !cmd.Flags().Changed("category") {
+		flagCategory = strings.Join(cfg.Categories, ",")
+	}
+
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" && !flagCLI {
 		return fmt.Errorf("ANTHROPIC_API_KEY environment variable is required.\nGet one at https://console.anthropic.com/\nOr use --cli to use your Claude Code subscription instead ($0 cost).")
@@ -104,6 +115,21 @@ func runReview(cmd *cobra.Command, args []string) error {
 	if len(files) == 0 {
 		fmt.Fprintf(os.Stderr, "probe: no supported files in diff\n")
 		return nil
+	}
+
+	// Apply .proberc ignore patterns
+	if len(cfg.Ignore) > 0 {
+		var filtered []diff.FileDiff
+		for _, f := range files {
+			if !cfg.ShouldIgnore(f.Path) {
+				filtered = append(filtered, f)
+			}
+		}
+		files = filtered
+		if len(files) == 0 {
+			fmt.Fprintf(os.Stderr, "probe: all files matched ignore patterns\n")
+			return nil
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "probe: reviewing %s (%d files, model: %s)\n", source, len(files), flagModel)
