@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -46,6 +47,17 @@ func RunReview(files []diff.FileDiff, cfg ReviewConfig) (*Review, error) {
 	var totalTokens TokenUsage
 
 	for _, batch := range batches {
+		// Check cache
+		batchDiff := diff.FormatForReview(batch)
+		lang := detectPrimaryLanguage(batch)
+		sysPrompt := GetSystemPromptForLanguage(lang)
+
+		if cached, ok := GetCached(batchDiff, cfg.Model, sysPrompt); ok {
+			allFindings = append(allFindings, cached...)
+			fmt.Fprintf(os.Stderr, "probe: using cached review for %d file(s)\n", len(batch))
+			continue
+		}
+
 		var findings []Finding
 		var tokens TokenUsage
 		var err error
@@ -59,6 +71,10 @@ func RunReview(files []diff.FileDiff, cfg ReviewConfig) (*Review, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		// Cache the result
+		SetCached(batchDiff, cfg.Model, sysPrompt, findings)
+
 		allFindings = append(allFindings, findings...)
 		totalTokens.Input += tokens.Input
 		totalTokens.Output += tokens.Output
