@@ -25,6 +25,7 @@ var (
 	flagMaxFiles int
 	flagCLI      bool
 	flagVerify   bool
+	flagHTML     bool
 )
 
 var reviewCmd = &cobra.Command{
@@ -46,6 +47,7 @@ func init() {
 	reviewCmd.Flags().IntVar(&flagMaxFiles, "max-files", 20, "Max files to review")
 	reviewCmd.Flags().BoolVar(&flagCLI, "cli", false, "Use claude CLI instead of API (uses your subscription, $0 cost)")
 	reviewCmd.Flags().BoolVar(&flagVerify, "verify", false, "After review, re-review the same code to verify findings are real (reduces false positives)")
+	reviewCmd.Flags().BoolVar(&flagHTML, "html", false, "Output as self-contained HTML report")
 
 	rootCmd.AddCommand(reviewCmd)
 
@@ -62,6 +64,7 @@ func init() {
 	rootCmd.Flags().IntVar(&flagMaxFiles, "max-files", 20, "Max files to review")
 	rootCmd.Flags().BoolVar(&flagCLI, "cli", false, "Use claude CLI instead of API ($0 cost)")
 	rootCmd.Flags().BoolVar(&flagVerify, "verify", false, "Re-review to verify findings (reduces false positives)")
+	rootCmd.Flags().BoolVar(&flagHTML, "html", false, "Output as HTML report")
 	rootCmd.RunE = runReview
 }
 
@@ -189,6 +192,8 @@ func runReview(cmd *cobra.Command, args []string) error {
 		output.PrintJSON(review)
 	} else if flagMarkdown {
 		output.PrintMarkdown(review)
+	} else if flagHTML {
+		output.PrintHTML(review)
 	} else {
 		output.PrintTerminal(review)
 	}
