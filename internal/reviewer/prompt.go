@@ -36,6 +36,8 @@ IMPORTANT: Only report real issues. Do not invent problems. Do not flag standard
 Respond with ONLY a JSON object in this format, no other text:
 {"findings": [...]}`
 
+const maxFileContextSize int64 = 50 * 1024 // 50KB
+
 func BuildReviewPrompt(files []diff.FileDiff) string {
 	formatted := diff.FormatForReview(files)
 
@@ -64,13 +66,34 @@ func BuildReviewPrompt(files []diff.FileDiff) string {
 		fileList[i] = fmt.Sprintf("  - %s (%s)%s", f.Path, f.Language, status)
 	}
 
-	return fmt.Sprintf(`Review this code diff. Primary language: %s
+	// Include full file context for modified (non-new, non-deleted) files
+	var contextSection string
+	for _, f := range files {
+		if f.IsNew || f.IsDelete {
+			continue
+		}
+		fullContent := diff.ReadFullFile(f.Path, maxFileContextSize)
+		if fullContent != "" {
+			contextSection += fmt.Sprintf("\n=== Full file context: %s ===\n%s\n", f.Path, fullContent)
+		}
+	}
+
+	prompt := fmt.Sprintf(`Review this code diff. Primary language: %s
 
 Files changed:
 %s
 
 Diff (with line numbers):
 %s`, primaryLang, strings.Join(fileList, "\n"), formatted)
+
+	if contextSection != "" {
+		prompt += fmt.Sprintf(`
+
+The following full file contents are provided for context. Use them to understand the surrounding code, but focus your review on the diff above.
+%s`, contextSection)
+	}
+
+	return prompt
 }
 
 func GetSystemPrompt() string {
