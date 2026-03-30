@@ -81,9 +81,26 @@ func RunReview(files []diff.FileDiff, cfg ReviewConfig) (*Review, error) {
 	}, nil
 }
 
+func detectPrimaryLanguage(files []diff.FileDiff) string {
+	counts := map[string]int{}
+	for _, f := range files {
+		counts[f.Language]++
+	}
+	best := ""
+	max := 0
+	for lang, c := range counts {
+		if c > max {
+			best = lang
+			max = c
+		}
+	}
+	return best
+}
+
 func reviewBatch(client anthropic.Client, files []diff.FileDiff, model string) ([]Finding, TokenUsage, error) {
 	prompt := BuildReviewPrompt(files)
-	systemPrompt := GetSystemPrompt()
+	lang := detectPrimaryLanguage(files)
+	systemPrompt := GetSystemPromptForLanguage(lang)
 
 	resp, err := client.Messages.New(context.Background(), anthropic.MessageNewParams{
 		Model:     model,
@@ -122,7 +139,8 @@ func reviewBatch(client anthropic.Client, files []diff.FileDiff, model string) (
 
 func reviewBatchCLI(files []diff.FileDiff, model string) ([]Finding, TokenUsage, error) {
 	prompt := BuildReviewPrompt(files)
-	systemPrompt := GetSystemPrompt()
+	lang := detectPrimaryLanguage(files)
+	systemPrompt := GetSystemPromptForLanguage(lang)
 
 	fullPrompt := systemPrompt + "\n\n" + prompt
 
