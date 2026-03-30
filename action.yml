@@ -1,0 +1,52 @@
+name: 'Probe Code Review'
+description: 'AI code review that catches bugs, security issues, and AI-generated anti-patterns'
+branding:
+  icon: 'search'
+  color: 'blue'
+
+inputs:
+  anthropic-api-key:
+    description: 'Anthropic API key'
+    required: true
+  severity:
+    description: 'Minimum severity to report (info, warning, critical)'
+    default: 'warning'
+  fail-on:
+    description: 'Fail the check on this severity level (warning, critical)'
+    default: 'critical'
+  model:
+    description: 'Claude model to use'
+    default: 'claude-sonnet-4-20250514'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Install Probe
+      shell: bash
+      run: go install github.com/jtsilverman/probe@latest
+
+    - name: Run Review
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        probe --branch ${{ github.event.pull_request.base.ref }} \
+          --severity ${{ inputs.severity }} \
+          --model ${{ inputs.model }} \
+          --markdown > review.md 2>&1 || true
+
+        echo "## Probe Code Review" >> $GITHUB_STEP_SUMMARY
+        cat review.md >> $GITHUB_STEP_SUMMARY
+
+        # Check verdict for fail condition
+        probe --branch ${{ github.event.pull_request.base.ref }} \
+          --severity ${{ inputs.fail-on }} \
+          --model ${{ inputs.model }} \
+          --json 2>/dev/null | \
+          python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(1 if d.get('summary',{}).get('verdict')=='fail' else 0)" || \
+          exit 1
