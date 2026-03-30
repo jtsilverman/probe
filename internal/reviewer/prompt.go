@@ -38,6 +38,66 @@ Respond with ONLY a JSON object in this format, no other text:
 
 const maxFileContextSize int64 = 50 * 1024 // 50KB
 
+var languagePrompts = map[string]string{
+	"Go": `
+Go-specific checks:
+- Unchecked errors (err ignored or assigned to _)
+- Goroutine leaks (goroutines started without cancellation or WaitGroup)
+- Defer misuse in loops (defer inside for loop closes over loop variable)
+- Mutex not unlocked (Lock without matching Unlock or defer Unlock)
+- Nil pointer dereference after type assertion without ok check
+- Context not propagated through call chain
+- Race conditions on shared state without synchronization`,
+
+	"Python": `
+Python-specific checks:
+- Mutable default arguments (def foo(x=[]))
+- Bare except clauses (except: without specifying exception type)
+- Late binding closures in loops (lambda/function captures loop variable by reference)
+- f-string injection (user input in f-strings used for SQL/shell)
+- Missing __init__.py for package imports
+- Using is instead of == for value comparison (except None)
+- Not closing file handles (missing with statement)`,
+
+	"JavaScript": `
+JavaScript/TypeScript-specific checks:
+- Prototype pollution (Object.assign from user input, recursive merge without checks)
+- Unhandled promise rejections (async without try/catch, missing .catch())
+- XSS via innerHTML/dangerouslySetInnerHTML with unsanitized input
+- == instead of === for comparisons
+- Callback hell (deeply nested callbacks instead of async/await)
+- Event listener leaks (addEventListener without removeEventListener)
+- Regex denial of service (ReDoS) from user-controlled patterns`,
+
+	"TypeScript": `
+JavaScript/TypeScript-specific checks:
+- Prototype pollution (Object.assign from user input, recursive merge without checks)
+- Unhandled promise rejections (async without try/catch, missing .catch())
+- XSS via innerHTML/dangerouslySetInnerHTML with unsanitized input
+- Type assertions (as any) that bypass type safety
+- Callback hell (deeply nested callbacks instead of async/await)
+- Event listener leaks (addEventListener without removeEventListener)
+- Non-null assertions (!) on potentially null values`,
+
+	"Rust": `
+Rust-specific checks:
+- unwrap() or expect() in production code (use ? operator or proper error handling)
+- unsafe blocks without clear justification
+- Clone on large types where borrowing would work
+- Mutex poisoning not handled (lock().unwrap() without recovery)
+- Missing Send/Sync bounds on types shared across threads
+- Unbounded recursion without tail-call optimization
+- Panic in library code (libraries should return Result, not panic)`,
+}
+
+// GetLanguagePrompt returns additional review instructions for a specific language.
+func GetLanguagePrompt(lang string) string {
+	if prompt, ok := languagePrompts[lang]; ok {
+		return prompt
+	}
+	return ""
+}
+
 func BuildReviewPrompt(files []diff.FileDiff) string {
 	formatted := diff.FormatForReview(files)
 
@@ -98,6 +158,15 @@ The following full file contents are provided for context. Use them to understan
 
 func GetSystemPrompt() string {
 	return systemPrompt
+}
+
+// GetSystemPromptForLanguage returns the system prompt with language-specific additions.
+func GetSystemPromptForLanguage(lang string) string {
+	extra := GetLanguagePrompt(lang)
+	if extra == "" {
+		return systemPrompt
+	}
+	return systemPrompt + "\n" + extra
 }
 
 // EstimateTokens roughly estimates token count (4 chars per token)
